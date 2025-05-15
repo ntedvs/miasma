@@ -1,8 +1,26 @@
 import os
 
+import whisperx
 from dia.model import Dia
-from moviepy import AudioFileClip, CompositeVideoClip, VideoFileClip
+from moviepy import (
+    AudioFileClip,
+    CompositeVideoClip,
+    TextClip,
+    VideoFileClip,
+    concatenate_audioclips,
+)
 from praw import Reddit
+
+comments = 5
+aspect_ratio = 9 / 16
+audio_file = "audio.mp3"
+out_file = "output.mp4"
+device = "cuda"
+
+
+def gen(text):
+    return model.generate(text, use_torch_compile=False, verbose=True)
+
 
 reddit = Reddit(
     client_id=os.getenv("ID"),
@@ -14,38 +32,55 @@ model = Dia.from_pretrained("nari-labs/Dia-1.6B", compute_dtype="float16")
 
 submission = next(reddit.subreddit("askreddit").hot(limit=1))
 text = [submission.title]
+model.save_audio("title.mp3", gen(submission.title + ". ."))
 
 submission.comment_sort = "best"
-for comment in submission.comments[:10]:
+for i, comment in enumerate(submission.comments[:comments]):
     text.append(comment.body)
+    model.save_audio(f"{i}.mp3", gen(f"{i + 1}. {comment.body}. ."))
 
-formatted = []
+audio = concatenate_audioclips(
+    [AudioFileClip("title.mp3")] + [AudioFileClip(f"{i}.mp3") for i in range(comments)],
+)
+audio.write_audiofile(audio_file)
 
-for i, item in enumerate(text):
-    prefix = "[S1]" if i % 2 == 0 else "[S2]"
+wx = whisperx.load_model("large-v2", device, compute_type="float16")
+wa = whisperx.load_audio(audio_file)
+result = wx.transcribe(wa, batch_size=16)
 
-    if i != 0:
-        formatted.append(f"{prefix} {i}. {item}")
-    else:
-        formatted.append(f"{prefix} {item}")
+align, metadata = whisperx.load_align_model(language_code="en", device=device)
+result = whisperx.align(
+    result["segments"], align, metadata, wa, device, return_char_alignments=False
+)
 
-output = model.generate(" ".join(formatted), use_torch_compile=False, verbose=True)
-model.save_audio("output.mp3", output)
+text_clips = []
 
-audio = AudioFileClip("output.mp3")
+for segment in result["segments"]:
+    for info in segment.get("words", []):
+        start = info["start"]
+        end = info["end"]
+        word = info["word"]
+
+        text = (
+            TextClip(font="arial.ttf", text=word, font_size=70, color="white")
+            .with_position("center")
+            .with_start(start)
+            .with_end(end)
+        )
+
+        text_clips.append(text)
 
 clip = (
-    VideoFileClip("footage.webm")
+    VideoFileClip("footage.mp4")
     .without_audio()
     .with_audio(audio)
     .subclipped(0, audio.duration)
 )
 
 height = clip.h
-width = int(height * 9 / 16)
-
-x1 = (clip.w - width) // 2
+width = height * aspect_ratio
+x1 = (clip.w - width) / 2
 x2 = x1 + width
 
 clip = clip.cropped(x1, 0, x2, 0)
-CompositeVideoClip([clip]).write_videofile("output.mp4")
+CompositeVideoClip([clip] + text_clips).write_videofile(out_file)
