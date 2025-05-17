@@ -14,6 +14,7 @@ from praw import Reddit
 
 
 def gen(text):
+    global model
     return model.generate(text, use_torch_compile=False, verbose=True)
 
 
@@ -45,6 +46,7 @@ audio = concatenate_audioclips(
 )
 audio.write_audiofile(audio_file)
 
+del model
 torch.cuda.empty_cache()
 
 model = whisperx.load_model("large-v2", device, compute_type="float16")
@@ -56,34 +58,31 @@ result = whisperx.align(
     result["segments"], align, metadata, wa, device, return_char_alignments=False
 )
 
+del model
 torch.cuda.empty_cache()
 
 text_clips = []
 
 for segment in result["segments"]:
     for info in segment.get("words", []):
-        start = info["start"]
-        end = info["end"]
-        word = info["word"]
-
         text = (
             TextClip(
-                font="arial.ttf",
-                text=word,
-                font_size=100,
+                text=info["word"],
                 color="white",
+                font="font.ttf",
+                font_size=100,
                 stroke_color="black",
                 stroke_width=10,
             )
             .with_position("center")
-            .with_start(start)
-            .with_end(end)
+            .with_start(info["start"])
+            .with_end(info["end"])
         )
 
         text_clips.append(text)
 
 clip = (
-    VideoFileClip("footage.mp4")
+    VideoFileClip("background.mp4")
     .without_audio()
     .with_audio(audio)
     .subclipped(0, audio.duration)
